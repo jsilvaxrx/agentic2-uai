@@ -90,22 +90,53 @@ curl https://tu-app-ecommerce-router.herokuapp.com/health
 
 ## Conectar Telegram
 
-1. Abre `@BotFather` en Telegram, ejecuta `/newbot` y guarda el token que entrega.
-2. Configura el token, un secreto propio y la URL pública de Heroku:
+Primero crea el bot con `@BotFather`, ejecuta `/newbot` y guarda el token entregado. Después sigue estos pasos en orden:
+
+1. Configura el token y un secreto propio en Heroku:
 
 ```bash
 heroku config:set TELEGRAM_TOKEN="token-de-botfather" --app tu-app-ecommerce-router
 heroku config:set TELEGRAM_SECRET="un-secreto-largo-y-privado" --app tu-app-ecommerce-router
-heroku config:set PUBLIC_URL="https://tu-app-ecommerce-router.herokuapp.com" --app tu-app-ecommerce-router
 ```
 
-3. Registra el webhook de Telegram:
+2. Confirma los cambios de Telegram y despliega tanto a GitHub como a Heroku:
 
 ```bash
-curl -X POST "https://api.telegram.org/bot$TELEGRAM_TOKEN/setWebhook" \
-  -d "url=https://tu-app-ecommerce-router.herokuapp.com/telegram" \
-  -d "secret_token=$TELEGRAM_SECRET"
+git add api/app.py scripts/set_webhook.py scripts/webhook_info.py README.md
+git commit -m "connect telegram webhook"
+git push origin main
+git push heroku main
 ```
 
-El endpoint `/telegram` actualmente confirma la recepción de cualquier JSON. El procesamiento de actualizaciones y la validación del secreto se implementarán en la siguiente etapa.
-# agentic2-uai
+3. Registra el webhook con la URL pública de Heroku y confirma su estado. Asegúrate de que `.env` tenga el mismo `TELEGRAM_TOKEN` y `TELEGRAM_SECRET` configurados en Heroku:
+
+```bash
+heroku config:set PUBLIC_URL="https://tu-app-ecommerce-router.herokuapp.com" --app tu-app-ecommerce-router
+PUBLIC_URL="https://tu-app-ecommerce-router.herokuapp.com" .venv/bin/python scripts/set_webhook.py
+.venv/bin/python scripts/webhook_info.py
+```
+
+El primer comando debe devolver `"ok": true`. El segundo muestra `url`, `pending_update_count` y `last_error_message` si Telegram detectó un problema.
+
+4. Escribe al bot estos seis mensajes y observa el enrutamiento en los logs:
+
+```bash
+heroku logs --tail --app tu-app-ecommerce-router
+```
+
+- `¿tienen la polera azul en talla M?` debe ir a `preventa`.
+- `mi pedido 4521 llegó roto` debe ir a `postventa`.
+- `hola` debe ir a `generica`.
+- `¿cuánto cuesta el envío a Valparaíso?` debe ir a `preventa`.
+- `quiero devolver unas zapatillas` debe ir a `postventa`.
+- `¿qué hora es en Tokio?` debe ir a `generica`.
+
+5. Si el bot no responde, revisa que el webhook apunte a `https://.../telegram`, que `TELEGRAM_SECRET` sea igual en Telegram y Heroku, y que `TELEGRAM_TOKEN` sea el correcto.
+
+Para probar antes de desplegar, levanta la API localmente y abre un túnel HTTPS:
+
+```bash
+cloudflared tunnel --url http://localhost:8000
+```
+
+Usa la URL HTTPS entregada por Cloudflare como `PUBLIC_URL` al ejecutar `scripts/set_webhook.py`.

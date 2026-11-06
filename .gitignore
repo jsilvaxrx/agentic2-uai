@@ -13,3 +13,5 @@ local_data/
 *.local.json
 *.local.csv
 .DS_Store
+
+prueba.txt
