@@ -20,6 +20,35 @@ cp .env.example .env
 
 Edita `.env` y configura al menos `GOOGLE_API_KEY`. No subas este archivo al repositorio.
 
+## Clave de la API
+
+`POST /chat` exige una clave en la cabecera `X-API-Key`. Genera una clave segura:
+
+```bash
+.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+En local, agrega el valor generado a `.env`:
+
+```env
+API_KEY=pega-aqui-tu-clave-generada
+```
+
+En Heroku, configura el mismo valor como Config Var:
+
+```bash
+heroku config:set API_KEY="pega-aqui-tu-clave-generada" --app tu-app-ecommerce-router
+```
+
+En Swagger, abre <http://localhost:8000/docs>, pulsa **Authorize**, ingresa la clave en `APIKeyHeader` y luego usa `Try it out` en `/chat`. Con `curl`, envía la misma cabecera:
+
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: pega-aqui-tu-clave-generada" \
+  -d '{"user_id":"usuario-123","texto":"¿Tienen la polera azul en talla M?"}'
+```
+
 ## Ejecutar el router localmente
 
 ```bash

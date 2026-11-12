@@ -9,7 +9,8 @@ import secrets
 from typing import Any, Literal
 
 from dotenv import load_dotenv
-from fastapi import Body, FastAPI, Header, HTTPException, Request
+from fastapi import Body, FastAPI, Header, HTTPException, Request, Security
+from fastapi.security import APIKeyHeader
 import httpx
 from pydantic import BaseModel, Field
 
@@ -17,6 +18,7 @@ from src.router.graph import create_graph
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+api_key_header = APIKeyHeader(name="X-API-Key", scheme_name="APIKeyHeader", auto_error=False)
 
 
 class HealthResponse(BaseModel):
@@ -61,6 +63,12 @@ class ErrorResponse(BaseModel):
     )
 
 
+def require_api_key(api_key: str | None = Security(api_key_header)) -> None:
+    expected_key = os.getenv("API_KEY")
+    if not expected_key or not api_key or not secrets.compare_digest(api_key, expected_key):
+        raise HTTPException(status_code=401, detail="Se requiere una X-API-Key válida.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.router_graph = create_graph()
@@ -103,6 +111,7 @@ def health() -> HealthResponse:
     summary="Enviar un mensaje al router",
     responses={
         200: {"description": "Mensaje enrutado correctamente."},
+        401: {"description": "Falta la clave de API o no es válida.", "model": ErrorResponse},
         422: {"description": "El cuerpo no cumple el formato requerido."},
         502: {
             "description": "El modelo no pudo procesar el mensaje.",
@@ -122,7 +131,11 @@ def health() -> HealthResponse:
         }
     },
 )
-def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
+def chat(
+    chat_request: ChatRequest,
+    request: Request,
+    _: None = Security(require_api_key),
+) -> ChatResponse:
     try:
         result = request.app.state.router_graph.invoke(
             {"mensaje": chat_request.texto},
