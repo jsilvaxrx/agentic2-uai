@@ -4,7 +4,8 @@ __pycache__/
 .langgraph_api/
 *.py[cod]
 .pytest_cache/
-data/
+data/*
+!data/tienda.md
 local_data/
 *.db
 *.sqlite

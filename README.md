@@ -55,6 +55,30 @@ curl -X POST http://localhost:8000/chat \
 .venv/bin/python main.py router "¿Tienen la polera azul en talla M?" --thread-id usuario-123
 ```
 
+## Memoria persistente
+
+Configura una base Postgres compartida para que el historial sobreviva reinicios de Heroku:
+
+```env
+DATABASE_URL=postgresql://usuario:contrasena@host:5432/ecommerce_router
+```
+
+La API usa Postgres automáticamente cuando puede conectarse; si la URL falta o la base no responde, sigue funcionando con memoria RAM. Comprueba el modo activo en `/health` mediante el campo `memoria`.
+
+Para usar el mismo hilo desde terminal en procesos distintos:
+
+```bash
+.venv/bin/python main.py router "me llamo Ana y busco un televisor de 55 pulgadas" --hilo prueba1
+.venv/bin/python main.py router "tengo hasta 500 mil pesos" --hilo prueba1
+.venv/bin/python scripts/ver_memoria.py prueba1
+```
+
+Sin argumentos, el inspector muestra los hilos, número de checkpoints y fecha del último:
+
+```bash
+.venv/bin/python scripts/ver_memoria.py
+```
+
 Para ver el recorrido y el motivo de enrutamiento:
 
 ```bash
@@ -82,6 +106,16 @@ Swagger está disponible en <http://localhost:8000/docs>. Prueba el chat con:
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{"user_id":"usuario-123","texto":"¿Tienen la polera azul en talla M?"}'
+```
+
+## Probar el webhook de n8n
+
+La copia `Webhook (texto y voz) → n8n → Agente` recibe `POST` en `N8N_WEBHOOK_URL`. Con la API local en marcha, abre <http://localhost:8000/webhook-tester>, ingresa tu `API_KEY` y prueba texto, voz simulada o GIF.
+
+La voz simulada envía el campo `texto` como si fuera la transcripción. El webhook publicado por defecto es:
+
+```env
+N8N_WEBHOOK_URL=https://agentuai.app.n8n.cloud/webhook/telegram-agent-test
 ```
 
 ## Pruebas

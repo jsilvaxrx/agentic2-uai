@@ -10,11 +10,13 @@ from typing import Any, Literal
 
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, Header, HTTPException, Request, Security
+from fastapi.responses import HTMLResponse
 from fastapi.security import APIKeyHeader
 import httpx
 from pydantic import BaseModel, Field
 
 from src.router.graph import create_graph
+from src.router.tools import open_checkpointer
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -26,6 +28,9 @@ class HealthResponse(BaseModel):
     modelo: str = Field(
         description="Modelo Gemini configurado para el router.",
         examples=["gemini-3.5-flash-lite"],
+    )
+    memoria: Literal["ram", "postgres"] = Field(
+        description="Checkpointer activo para las conversaciones.", examples=["postgres"]
     )
 
 
@@ -63,6 +68,12 @@ class ErrorResponse(BaseModel):
     )
 
 
+class WebhookTestRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+    texto: str = Field(min_length=1)
+    tipo: Literal["texto", "voz", "gif"]
+
+
 def require_api_key(api_key: str | None = Security(api_key_header)) -> None:
     expected_key = os.getenv("API_KEY")
     if not expected_key or not api_key or not secrets.compare_digest(api_key, expected_key):
@@ -71,8 +82,15 @@ def require_api_key(api_key: str | None = Security(api_key_header)) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.router_graph = create_graph()
-    yield
+    checkpointer_handle = open_checkpointer()
+    if checkpointer_handle.fallback_reason:
+        logger.warning("Se usará memoria RAM: %s", checkpointer_handle.fallback_reason)
+    app.state.memory_mode = checkpointer_handle.mode
+    app.state.router_graph = create_graph(checkpointer=checkpointer_handle.checkpointer)
+    try:
+        yield
+    finally:
+        checkpointer_handle.close()
 
 
 app = FastAPI(
@@ -97,11 +115,59 @@ app = FastAPI(
     tags=["salud"],
     summary="Consultar el estado de la API",
 )
-def health() -> HealthResponse:
+def health(request: Request) -> HealthResponse:
     return HealthResponse(
         ok=True,
         modelo=os.getenv("MODELO", "gemini-3.5-flash-lite"),
+        memoria=getattr(request.app.state, "memory_mode", "ram"),
     )
+
+
+@app.get("/webhook-tester", include_in_schema=False, response_class=HTMLResponse)
+def webhook_tester() -> str:
+    return """<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>Webhook Tester</title>
+<style>body{font-family:system-ui;max-width:680px;margin:48px auto;padding:0 20px}label{display:block;margin-top:16px;font-weight:600}input,select,textarea,button{box-sizing:border-box;width:100%;padding:10px;margin-top:6px;font:inherit}textarea{min-height:120px}button{background:#171717;color:#fff;border:0;cursor:pointer;margin-top:24px}pre{white-space:pre-wrap;background:#f4f4f5;padding:16px;border-radius:8px}</style>
+</head><body><h1>Webhook tester</h1><p>Prueba el flujo n8n de texto, voz simulada o GIF.</p>
+<label>API key<input id="key" type="password" placeholder="Tu API_KEY local"></label>
+<label>User ID<input id="user" value="web-local-1"></label>
+<label>Tipo<select id="type"><option value="texto">Texto</option><option value="voz">Voz simulada</option><option value="gif">GIF</option></select></label>
+<label>Texto o transcripción<textarea id="text">¿Tienen la polera azul en talla M?</textarea></label>
+<button id="send">Enviar al webhook</button><pre id="result">Esperando prueba.</pre>
+<script>
+document.getElementById('send').onclick = async () => {
+  const result = document.getElementById('result');
+  result.textContent = 'Enviando...';
+  const response = await fetch('/webhook-tester/send', {
+    method: 'POST', headers: {'Content-Type': 'application/json', 'X-API-Key': document.getElementById('key').value},
+    body: JSON.stringify({user_id: document.getElementById('user').value, texto: document.getElementById('text').value, tipo: document.getElementById('type').value})
+  });
+  result.textContent = JSON.stringify(await response.json(), null, 2);
+};
+</script></body></html>"""
+
+
+@app.post("/webhook-tester/send", include_in_schema=False)
+def send_webhook_test(
+    payload: WebhookTestRequest,
+    _: None = Security(require_api_key),
+) -> dict[str, Any]:
+    webhook_url = os.getenv("N8N_WEBHOOK_URL")
+    if not webhook_url:
+        raise HTTPException(status_code=503, detail="N8N_WEBHOOK_URL no está configurada.")
+
+    try:
+        response = httpx.post(webhook_url, json=payload.model_dump(), timeout=35.0)
+        response.raise_for_status()
+    except httpx.HTTPError:
+        logger.exception("No se pudo llamar al webhook de prueba de n8n.")
+        raise HTTPException(status_code=502, detail="El webhook de n8n no respondió correctamente.") from None
+
+    try:
+        body: Any = response.json()
+    except ValueError:
+        body = response.text
+    return {"ok": True, "webhook_response": body}
 
 
 @app.post(
