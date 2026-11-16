@@ -1,0 +1,10 @@
+[
+  {"numero":"1001","nombre_cliente":"Ana Pérez","productos":["Smart TV NovaView 55 pulgadas"],"fecha_compra":"2026-10-28","estado":"despachado","fecha_estimada_entrega":"2026-11-15","codigo_seguimiento":"NV-CL-1001"},
+  {"numero":"1002","nombre_cliente":"José Silva","productos":["Celular NovaPhone X 256 GB"],"fecha_compra":"2026-10-29","estado":"entregado","fecha_estimada_entrega":"2026-11-04","codigo_seguimiento":"NV-CL-1002"},
+  {"numero":"1003","nombre_cliente":"Carla Soto","productos":["Televisor LED 43 pulgadas"],"fecha_compra":"2026-11-01","estado":"preparando","fecha_estimada_entrega":"2026-11-18","codigo_seguimiento":"NV-CL-1003"},
+  {"numero":"1004","nombre_cliente":"Diego Muñoz","productos":["Celular NovaPhone Lite 128 GB"],"fecha_compra":"2026-10-20","estado":"devuelto","fecha_estimada_entrega":"2026-10-27","codigo_seguimiento":"NV-CL-1004"},
+  {"numero":"1005","nombre_cliente":"María Rojas","productos":["Smart TV NovaView 65 pulgadas"],"fecha_compra":"2026-11-03","estado":"despachado","fecha_estimada_entrega":"2026-11-16","codigo_seguimiento":"NV-CL-1005"},
+  {"numero":"1006","nombre_cliente":"Pedro González","productos":["Celular NovaPhone Pro 512 GB"],"fecha_compra":"2026-10-25","estado":"entregado","fecha_estimada_entrega":"2026-10-30","codigo_seguimiento":"NV-CL-1006"},
+  {"numero":"1007","nombre_cliente":"Lucía Fernández","productos":["Televisor Oled 55 pulgadas"],"fecha_compra":"2026-11-05","estado":"preparando","fecha_estimada_entrega":"2026-11-20","codigo_seguimiento":"NV-CL-1007"},
+  {"numero":"1008","nombre_cliente":"Tomás Vega","productos":["Celular NovaPhone X 128 GB"],"fecha_compra":"2026-10-30","estado":"despachado","fecha_estimada_entrega":"2026-11-14","codigo_seguimiento":"NV-CL-1008"}
+]

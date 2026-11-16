@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat de la tienda</title>
+<style>
+  :root {
+    --fondo: #e9e4dc; --panel: #f7f5f1; --barra: #1f4d43; --barra-texto: #f3f7f5;
+    --mia: #d6f0c9; --suya: #ffffff; --texto: #1c2422; --tenue: #66736f;
+    --borde: #d9d3c8; --acento: #1f7a63; --chip: #eef3f1; --error: #b3261e;
+    --herramienta: #fff3d6; --herramienta-borde: #e6c877;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo: #0f1614; --panel: #17201d; --barra: #1b2b27; --barra-texto: #e6efec;
+      --mia: #1f5c4b; --suya: #22302c; --texto: #e6efec; --tenue: #93a39e;
+      --borde: #2b3a36; --acento: #5fd0b0; --chip: #1c2925; --error: #ff8a80;
+      --herramienta: #3a3219; --herramienta-borde: #7a6630;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--fondo); color: var(--texto);
+    display: flex; justify-content: center;
+  }
+  .app {
+    width: 100%; max-width: 780px; height: 100dvh;
+    display: flex; flex-direction: column; background: var(--panel);
+    border-inline: 1px solid var(--borde);
+  }
+  header {
+    background: var(--barra); color: var(--barra-texto);
+    padding: 10px 16px; display: flex; align-items: center; gap: 12px;
+  }
+  .avatar {
+    width: 38px; height: 38px; border-radius: 50%; flex: none;
+    background: var(--acento); color: #fff; display: grid; place-items: center; font-weight: 700;
+  }
+  .titulo { flex: 1; min-width: 0; }
+  .titulo b { display: block; }
+  .titulo small { opacity: .75; }
+  header button {
+    background: transparent; color: inherit; border: 1px solid rgba(255,255,255,.3);
+    border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  header button[aria-pressed="true"] { background: rgba(255,255,255,.18); }
+  .ajustes {
+    display: none; gap: 10px; padding: 12px 16px; flex-wrap: wrap;
+    background: var(--chip); border-bottom: 1px solid var(--borde);
+  }
+  .ajustes.abierto { display: flex; }
+  .ajustes label { flex: 1 1 200px; font-size: 12px; color: var(--tenue); }
+  .ajustes input {
+    display: block; width: 100%; margin-top: 4px; padding: 8px 10px; font: inherit;
+    color: var(--texto); background: var(--panel); border: 1px solid var(--borde); border-radius: 8px;
+  }
+  .ajustes button {
+    align-self: flex-end; padding: 8px 12px; font: inherit; cursor: pointer;
+    color: var(--texto); background: var(--panel); border: 1px solid var(--borde); border-radius: 8px;
+  }
+  main { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .vacio { margin: auto; text-align: center; color: var(--tenue); max-width: 36ch; }
+  .fila { display: flex; flex-direction: column; max-width: 84%; }
+  .fila.mia { align-self: flex-end; align-items: flex-end; }
+  .fila.suya { align-self: flex-start; align-items: flex-start; }
+  .burbuja {
+    padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere;
+    box-shadow: 0 1px 1px rgba(0,0,0,.08);
+  }
+  .mia .burbuja { background: var(--mia); border-top-right-radius: 3px; }
+  .suya .burbuja { background: var(--suya); border-top-left-radius: 3px; }
+  .burbuja.error { color: var(--error); }
+  .burbuja a { color: var(--acento); }
+  .hora { font-size: 11px; color: var(--tenue); margin-top: 2px; }
+  .saltos {
+    margin-top: 6px; padding: 8px 10px; border: 1px dashed var(--borde); border-radius: 10px;
+    background: var(--chip); font-size: 12px; max-width: 100%;
+  }
+  body.sin-saltos .saltos { display: none; }
+  .camino { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+  .nodo {
+    padding: 2px 8px; border-radius: 999px; border: 1px solid var(--borde);
+    background: var(--panel); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .nodo.extremo { color: var(--tenue); }
+  .nodo.herramienta { background: var(--herramienta); border-color: var(--herramienta-borde); }
+  .flecha { color: var(--tenue); }
+  .motivo { margin-top: 6px; color: var(--tenue); }
+  .motivo b { color: var(--texto); font-weight: 600; }
+  .escribiendo span {
+    display: inline-block; width: 6px; height: 6px; margin: 0 2px; border-radius: 50%;
+    background: var(--tenue); animation: salto 1s infinite;
+  }
+  .escribiendo span:nth-child(2) { animation-delay: .15s; }
+  .escribiendo span:nth-child(3) { animation-delay: .3s; }
+  @keyframes salto { 0%, 60%, 100% { opacity: .3; transform: none; } 30% { opacity: 1; transform: translateY(-3px); } }
+  @media (prefers-reduced-motion: reduce) { .escribiendo span { animation: none; } }
+  form { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--borde); background: var(--chip); }
+  textarea {
+    flex: 1; resize: none; max-height: 140px; padding: 10px 14px; font: inherit;
+    color: var(--texto); background: var(--panel); border: 1px solid var(--borde); border-radius: 20px;
+  }
+  form button {
+    flex: none; width: 44px; height: 44px; align-self: flex-end; border: 0; border-radius: 50%;
+    background: var(--acento); color: #fff; font-size: 18px; cursor: pointer;
+  }
+  form button:disabled { opacity: .5; cursor: default; }
+  :focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="avatar" aria-hidden="true">T</div>
+    <div class="titulo"><b>Asistente de la tienda</b><small id="estado">conectando…</small></div>
+    <button id="ver-saltos" type="button" aria-pressed="true">Saltos</button>
+    <button id="ver-ajustes" type="button" aria-expanded="false">Ajustes</button>
+  </header>
+  <section class="ajustes" id="ajustes">
+    <label>API key (X-API-Key)<input id="clave" type="password" autocomplete="off" placeholder="Tu API_KEY del .env"></label>
+    <label>User ID (hilo de memoria)<input id="usuario"></label>
+    <button id="nuevo-hilo" type="button">Nueva conversación</button>
+  </section>
+  <main id="mensajes" aria-live="polite">
+    <p class="vacio" id="vacio">Escribe un mensaje para empezar. Debajo de cada respuesta verás los nodos por los que pasó el grafo.</p>
+  </main>
+  <form id="formulario">
+    <textarea id="texto" rows="1" placeholder="Escribe un mensaje" aria-label="Mensaje"></textarea>
+    <button id="enviar" type="submit" aria-label="Enviar">➤</button>
+  </form>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const guardar = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+const leer = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const nuevoId = () => 'web-' + Math.random().toString(36).slice(2, 10);
+
+$('clave').value = leer('chat.clave') || '';
+$('usuario').value = leer('chat.usuario') || nuevoId();
+guardar('chat.usuario', $('usuario').value);
+$('clave').oninput = () => guardar('chat.clave', $('clave').value);
+$('usuario').oninput = () => guardar('chat.usuario', $('usuario').value);
+
+function abrirAjustes(abierto) {
+  $('ajustes').classList.toggle('abierto', abierto);
+  $('ver-ajustes').setAttribute('aria-expanded', abierto);
+}
+$('ver-ajustes').onclick = () => abrirAjustes(!$('ajustes').classList.contains('abierto'));
+if (!$('clave').value) abrirAjustes(true);
+
+function mostrarSaltos(visible) {
+  document.body.classList.toggle('sin-saltos', !visible);
+  $('ver-saltos').setAttribute('aria-pressed', visible);
+  guardar('chat.saltos', visible ? '1' : '0');
+}
+mostrarSaltos(leer('chat.saltos') !== '0');
+$('ver-saltos').onclick = () => mostrarSaltos(document.body.classList.contains('sin-saltos'));
+
+$('nuevo-hilo').onclick = () => {
+  $('usuario').value = nuevoId();
+  guardar('chat.usuario', $('usuario').value);
+  $('mensajes').replaceChildren();
+};
+
+fetch('/health').then((r) => r.json()).then((s) => {
+  $('estado').textContent = `${s.modelo} · memoria ${s.memoria}`;
+}).catch(() => { $('estado').textContent = 'sin conexión'; });
+
+function el(tag, clase, texto) {
+  const nodo = document.createElement(tag);
+  if (clase) nodo.className = clase;
+  if (texto !== undefined) nodo.textContent = texto;
+  return nodo;
+}
+
+function conEnlaces(burbuja, texto) {
+  const partes = texto.split(/(https?:\/\/[^\s)]+)/g);
+  partes.forEach((parte, i) => {
+    if (i % 2) {
+      const a = el('a', '', parte);
+      a.href = parte; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      burbuja.append(a);
+    } else if (parte) burbuja.append(parte);
+  });
+}
+
+function agregar(lado, texto, opciones = {}) {
+  $('vacio')?.remove();
+  const fila = el('div', 'fila ' + lado);
+  const burbuja = el('div', 'burbuja' + (opciones.error ? ' error' : ''));
+  if (opciones.escribiendo) {
+    burbuja.classList.add('escribiendo');
+    burbuja.append(el('span'), el('span'), el('span'));
+  } else conEnlaces(burbuja, texto);
+  fila.append(burbuja);
+  if (opciones.saltos) fila.append(panelSaltos(opciones.saltos));
+  if (!opciones.escribiendo) {
+    fila.append(el('div', 'hora', new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })));
+  }
+  $('mensajes').append(fila);
+  $('mensajes').scrollTop = $('mensajes').scrollHeight;
+  return fila;
+}
+
+function panelSaltos(saltos) {
+  const panel = el('div', 'saltos');
+  const camino = el('div', 'camino');
+  const paso = (texto, clase) => {
+    if (camino.children.length) camino.append(el('span', 'flecha', '→'));
+    camino.append(el('span', 'nodo ' + (clase || ''), texto));
+  };
+  paso('inicio', 'extremo');
+  let motivo = '';
+  saltos.forEach((salto) => {
+    paso(salto.nodo);
+    (salto.herramientas || []).forEach((h) => paso('🔧 ' + h, 'herramienta'));
+    if (salto.motivo) motivo = salto.motivo;
+  });
+  paso('fin', 'extremo');
+  panel.append(camino);
+  if (motivo) {
+    const linea = el('div', 'motivo');
+    linea.append(el('b', '', 'Motivo del router: '), motivo);
+    panel.append(linea);
+  }
+  return panel;
+}
+
+const texto = $('texto');
+texto.oninput = () => { texto.style.height = 'auto'; texto.style.height = texto.scrollHeight + 'px'; };
+texto.onkeydown = (e) => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('formulario').requestSubmit(); }
+};
+
+$('formulario').onsubmit = async (e) => {
+  e.preventDefault();
+  const mensaje = texto.value.trim();
+  if (!mensaje || $('enviar').disabled) return;
+  agregar('mia', mensaje);
+  texto.value = ''; texto.style.height = 'auto';
+  $('enviar').disabled = true;
+  const espera = agregar('suya', '', { escribiendo: true });
+  try {
+    const respuesta = await fetch('/chat/saltos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': $('clave').value },
+      body: JSON.stringify({ user_id: $('usuario').value || 'web', texto: mensaje }),
+    });
+    const datos = await respuesta.json().catch(() => ({}));
+    espera.remove();
+    if (!respuesta.ok) {
+      if (respuesta.status === 401) abrirAjustes(true);
+      const detalle = typeof datos.detail === 'string' ? datos.detail : `Error ${respuesta.status}`;
+      agregar('suya', detalle, { error: true });
+    } else agregar('suya', datos.respuesta, { saltos: datos.saltos });
+  } catch {
+    espera.remove();
+    agregar('suya', 'No se pudo conectar con el servidor.', { error: true });
+  } finally {
+    $('enviar').disabled = false;
+    texto.focus();
+  }
+};
+</script>
+</body>
+</html>

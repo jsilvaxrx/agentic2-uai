@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import logging
 import os
+from pathlib import Path
 import secrets
 from typing import Any, Literal
 
@@ -20,6 +21,7 @@ from src.router.tools import open_checkpointer
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+CHAT_UI_PATH = Path(__file__).with_name("chat_ui.html")
 api_key_header = APIKeyHeader(name="X-API-Key", scheme_name="APIKeyHeader", auto_error=False)
 
 
@@ -59,6 +61,20 @@ class ChatResponse(BaseModel):
         description="Respuesta del agente cascarón seleccionado.",
         examples=["Soy el agente de preventa. Recibí: ¿Tienen la polera azul en talla M?. Pronto podré ayudarte con productos y compras."],
     )
+
+
+class Salto(BaseModel):
+    nodo: str = Field(description="Nodo del grafo que se ejecutó.", examples=["router"])
+    motivo: str | None = Field(
+        default=None, description="Motivo de la ruta; solo lo informa el nodo router."
+    )
+    herramientas: list[str] = Field(
+        default_factory=list, description="Herramientas que usó el nodo, en orden."
+    )
+
+
+class ChatSaltosResponse(ChatResponse):
+    saltos: list[Salto] = Field(description="Nodos recorridos por el grafo, en orden.")
 
 
 class ErrorResponse(BaseModel):
@@ -219,6 +235,59 @@ def chat(
         motivo=result["motivo"],
         respuesta=result["respuesta"],
     )
+
+
+@app.get("/chat-ui", include_in_schema=False, response_class=HTMLResponse)
+def chat_ui() -> str:
+    return CHAT_UI_PATH.read_text(encoding="utf-8")
+
+
+@app.post(
+    "/chat/saltos",
+    response_model=ChatSaltosResponse,
+    tags=["chat"],
+    summary="Enviar un mensaje y ver los nodos recorridos",
+    responses={
+        401: {"description": "Falta la clave de API o no es válida.", "model": ErrorResponse},
+        502: {"description": "El modelo no pudo procesar el mensaje.", "model": ErrorResponse},
+    },
+)
+def chat_saltos(
+    chat_request: ChatRequest,
+    request: Request,
+    _: None = Security(require_api_key),
+) -> ChatSaltosResponse:
+    saltos: list[Salto] = []
+    result: dict[str, Any] = {}
+    try:
+        for event in request.app.state.router_graph.stream(
+            {"mensaje": chat_request.texto},
+            config={"configurable": {"thread_id": chat_request.user_id}},
+            stream_mode="updates",
+        ):
+            for node, update in event.items():
+                update = update or {}
+                result.update(update)
+                saltos.append(
+                    Salto(
+                        nodo=node,
+                        motivo=update.get("motivo"),
+                        herramientas=update.get("herramientas_usadas", []),
+                    )
+                )
+        response = ChatSaltosResponse(
+            ruta=result["ruta"],
+            motivo=result["motivo"],
+            respuesta=result["respuesta"],
+            saltos=saltos,
+        )
+    except Exception:
+        logger.exception("El router falló al procesar el mensaje del usuario %s", chat_request.user_id)
+        raise HTTPException(
+            status_code=502,
+            detail="No fue posible procesar el mensaje en este momento. Inténtalo nuevamente.",
+        ) from None
+    return response
 
 
 @app.post("/telegram", include_in_schema=False, tags=["telegram"])

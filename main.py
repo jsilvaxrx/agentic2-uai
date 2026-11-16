@@ -54,6 +54,10 @@ def main() -> None:
                 print(f"Nodo: {node}")
                 if node == "router" and "motivo" in update:
                     print(f"Motivo: {update['motivo']}")
+                for herramienta in update.get("herramientas_usadas", []):
+                    print(f"Herramienta: {herramienta}")
+                if update.get("respuesta"):
+                    print(f"Respuesta: {update['respuesta']}")
             return
 
         result = graph.invoke(
