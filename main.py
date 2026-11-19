@@ -29,7 +29,7 @@ def main() -> None:
     checkpointer_handle = None
     try:
         module = importlib.import_module(f"src.{args.agente}.graph")
-        if args.agente == "router":
+        if args.agente == "router" and not args.diagrama:
             from src.router.tools import open_checkpointer
 
             checkpointer_handle = open_checkpointer()
@@ -42,7 +42,7 @@ def main() -> None:
         sys.exit(f"No se pudo cargar el agente '{args.agente}': {error}")
     try:
         if args.diagrama:
-            print(graph.get_graph().draw_mermaid())
+            print(graph.get_graph(xray=2).draw_mermaid())
             return
 
         if args.saltos:

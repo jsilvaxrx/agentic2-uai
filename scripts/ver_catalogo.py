@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 load_dotenv(PROJECT_ROOT / ".env")
 
-from src.router.catalogo import CATALOGO_NO_DISPONIBLE, buscar_en_catalogo, ejecutar_select
+from src.router.catalogo import CATALOGO_NO_DISPONIBLE, ejecutar_select
 
 
 def main() -> None:
@@ -20,15 +20,30 @@ def main() -> None:
     parser.add_argument("texto", nargs="?", help="Texto que debe aparecer en el nombre.")
     args = parser.parse_args()
 
-    if args.texto:
-        products = buscar_en_catalogo(args.texto, limite=10)
+    if args.texto is not None:
+        products = ejecutar_select(
+            """
+            SELECT sku_id, nombre,
+                   NULLIF(BTRIM(precio_internet::text), '')::numeric AS precio_internet,
+                   NULLIF(BTRIM(rating::text), '')::numeric AS rating
+            FROM catalogo.productos_unicos
+            WHERE strpos(lower(nombre), lower(%s::text)) > 0
+            ORDER BY rating DESC NULLS LAST
+            LIMIT 10
+            """,
+            (args.texto,),
+        )
         if products == CATALOGO_NO_DISPONIBLE:
             print(CATALOGO_NO_DISPONIBLE)
             return
+        if not products:
+            print("No se encontraron productos.")
         for product in products:
+            precio = f"${product['precio_internet']:,.0f}".replace(",", ".")
+            rating = product["rating"] if product["rating"] is not None else "sin dato"
             print(
                 f"{product['sku_id']} | {product['nombre']} | "
-                f"${product['precio_internet']:,} | rating: {product['rating'] or 'sin dato'}"
+                f"{precio} | rating: {rating}"
             )
         return
 

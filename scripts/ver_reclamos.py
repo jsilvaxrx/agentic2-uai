@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import logging
 
 from dotenv import load_dotenv
 
@@ -15,6 +16,7 @@ from src.router.tools import listar_reclamos
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
     reclamos = listar_reclamos()
     if not reclamos:
         print("No hay reclamos guardados.")
@@ -22,8 +24,9 @@ def main() -> None:
     for reclamo in reclamos:
         print(
             f"{reclamo['ticket']} | pedido {reclamo['numero_pedido']} | "
-            f"{reclamo['motivo']} | {reclamo['creado_en']}"
+            f"{reclamo['motivo']} | hilo {reclamo['thread_id']} | {reclamo['creado_en']}"
         )
+        print(f"  Detalle: {reclamo['detalle']}")
 
 
 if __name__ == "__main__":

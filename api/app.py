@@ -58,8 +58,8 @@ class ChatResponse(BaseModel):
         examples=["Consulta por talla y disponibilidad antes de comprar."],
     )
     respuesta: str = Field(
-        description="Respuesta del agente cascarón seleccionado.",
-        examples=["Soy el agente de preventa. Recibí: ¿Tienen la polera azul en talla M?. Pronto podré ayudarte con productos y compras."],
+        description="Respuesta del agente seleccionado, basada en sus herramientas y el historial.",
+        examples=["¿Qué presupuesto tienes para tu celular?"],
     )
 
 

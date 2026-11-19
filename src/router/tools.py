@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Literal
+from threading import BoundedSemaphore
+from typing import Any, Iterator, Literal
+import unicodedata
 from uuid import uuid4
 
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -22,7 +25,6 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from .a2a_redes import TIMEOUT_SEGUNDOS, preguntar_redes
 from .catalogo import buscar_en_catalogo, ejecutar_select
 
 logger = logging.getLogger(__name__)
@@ -31,9 +33,7 @@ PEDIDOS_PATH = PROJECT_ROOT / "data" / "pedidos.json"
 POLITICAS_PATH = PROJECT_ROOT / "data" / "politicas.md"
 RECLAMOS_EN_MEMORIA: list[dict[str, str]] = []
 RECLAMO_THREAD_ID: ContextVar[str] = ContextVar("reclamo_thread_id", default="sin-hilo")
-REDES_NO_DISPONIBLE = "el agente de redes no está disponible"
-REDES_MAX_CARACTERES = 1500
-ETIQUETAS_HERRAMIENTAS = {"consultar_redes": "consultar_redes (A2A)"}
+_CONEXION_RECLAMOS = BoundedSemaphore(1)
 
 
 class Decision(BaseModel):
@@ -66,6 +66,8 @@ def create_llm() -> ChatGoogleGenerativeAI:
 def open_checkpointer(database_url: str | None = None) -> CheckpointerHandle:
     """Abre Postgres y crea sus tablas; ante un fallo conserva el router en RAM."""
     database_url = database_url if database_url is not None else os.getenv("DATABASE_URL")
+    # Los reclamos se inicializan aunque falle el checkpointer o se use RAM.
+    setup_reclamos(database_url)
     if not database_url:
         return CheckpointerHandle(
             checkpointer=MemorySaver(),
@@ -88,7 +90,6 @@ def open_checkpointer(database_url: str | None = None) -> CheckpointerHandle:
         pool.check()
         checkpointer = PostgresSaver(pool)
         checkpointer.setup()
-        setup_reclamos(database_url)
         return CheckpointerHandle(
             checkpointer=checkpointer,
             mode="postgres",
@@ -112,6 +113,24 @@ def reset_reclamo_thread_id(token: Token[str]) -> None:
     RECLAMO_THREAD_ID.reset(token)
 
 
+@contextmanager
+def conexion_reclamos(database_url: str) -> Iterator[psycopg.Connection]:
+    """Usa como máximo una conexión de reclamos y la cierra al terminar."""
+    if not _CONEXION_RECLAMOS.acquire(timeout=5):
+        raise psycopg.OperationalError("No hay conexión de reclamos disponible.")
+    try:
+        with psycopg.connect(
+            database_url,
+            connect_timeout=5,
+            autocommit=True,
+            row_factory=dict_row,
+            options="-c statement_timeout=5000",
+        ) as connection:
+            yield connection
+    finally:
+        _CONEXION_RECLAMOS.release()
+
+
 def setup_reclamos(database_url: str | None = None) -> bool:
     """Crea la tabla de reclamos sin mantener conexiones abiertas."""
     database_url = database_url if database_url is not None else os.getenv("DATABASE_URL")
@@ -119,7 +138,7 @@ def setup_reclamos(database_url: str | None = None) -> bool:
         logger.warning("Sin DATABASE_URL, los reclamos se guardarán solo en memoria.")
         return False
     try:
-        with psycopg.connect(database_url, connect_timeout=5, autocommit=True) as connection:
+        with conexion_reclamos(database_url) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -163,8 +182,14 @@ def secciones_politicas() -> dict[str, str]:
 @tool
 def estado_pedido(numero: str) -> dict[str, Any] | str:
     """Obtiene estado, fechas, productos y seguimiento de un pedido por número."""
-    for pedido in cargar_pedidos():
-        if pedido["numero"] == str(numero):
+    numero = str(numero).strip().removeprefix("#").strip()
+    try:
+        pedidos = cargar_pedidos()
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Los datos de pedidos no están disponibles.")
+        return "pedidos no disponibles"
+    for pedido in pedidos:
+        if str(pedido["numero"]) == numero:
             return pedido
     return "no existe"
 
@@ -172,7 +197,10 @@ def estado_pedido(numero: str) -> dict[str, Any] | str:
 @tool
 def politica(tema: str) -> str:
     """Devuelve la política de devoluciones, cambios o garantía."""
-    normalized = tema.lower().strip().replace("í", "i")
+    normalized = "".join(
+        letra for letra in unicodedata.normalize("NFKD", tema.lower().strip())
+        if not unicodedata.combining(letra)
+    )
     aliases = {
         "devolucion": "devoluciones",
         "devoluciones": "devoluciones",
@@ -181,7 +209,11 @@ def politica(tema: str) -> str:
         "garantia": "garantía",
         "garantias": "garantía",
     }
-    section = secciones_politicas().get(aliases.get(normalized, normalized))
+    try:
+        section = secciones_politicas().get(aliases.get(normalized, normalized))
+    except OSError:
+        logger.warning("Las políticas de postventa no están disponibles.")
+        return "políticas no disponibles"
     return section or "No tengo una política para ese tema."
 
 
@@ -190,12 +222,15 @@ def guardar_reclamo(record: dict[str, str]) -> bool:
     if not database_url:
         return False
     try:
-        with psycopg.connect(database_url, connect_timeout=5, autocommit=True) as connection:
+        with conexion_reclamos(database_url) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO reclamos (ticket, numero_pedido, motivo, detalle, thread_id)
-                    VALUES (%(ticket)s, %(numero_pedido)s, %(motivo)s, %(detalle)s, %(thread_id)s)
+                    INSERT INTO reclamos
+                        (ticket, numero_pedido, motivo, detalle, thread_id, creado_en)
+                    VALUES
+                        (%(ticket)s, %(numero_pedido)s, %(motivo)s, %(detalle)s,
+                         %(thread_id)s, %(creado_en)s)
                     """,
                     record,
                 )
@@ -206,27 +241,39 @@ def guardar_reclamo(record: dict[str, str]) -> bool:
 
 
 @tool
-def crear_reclamo(numero_pedido: str, motivo: str, detalle: str) -> str:
-    """Crea un reclamo confirmado y devuelve su número de ticket."""
+def crear_reclamo(
+    numero_pedido: str, motivo: str, detalle: str, config: RunnableConfig,
+) -> str:
+    """Crea un reclamo después de que el cliente confirme el motivo.
+
+    Usa un número de pedido consultado con estado_pedido. Para atención humana
+    o casos fuera de las políticas, motivo debe ser exactamente 'derivar a persona'.
+    Devuelve el ticket registrado; no inventes un ticket por tu cuenta.
+    """
     record = {
         "ticket": f"REC-{uuid4().hex[:8].upper()}",
-        "numero_pedido": str(numero_pedido),
+        "numero_pedido": str(numero_pedido).strip().removeprefix("#").strip(),
         "motivo": motivo,
         "detalle": detalle,
-        "thread_id": RECLAMO_THREAD_ID.get(),
+        "thread_id": str(
+            config.get("configurable", {}).get("thread_id", RECLAMO_THREAD_ID.get())
+        ),
+        "creado_en": datetime.now(timezone.utc).isoformat(),
     }
     if not guardar_reclamo(record):
-        RECLAMOS_EN_MEMORIA.append({**record, "creado_en": "solo en memoria"})
+        RECLAMOS_EN_MEMORIA.append(record)
         logger.warning("Reclamo %s guardado solo en memoria.", record["ticket"])
     return f"Reclamo creado. Ticket: {record['ticket']}"
 
 
 def listar_reclamos() -> list[dict[str, Any]]:
     database_url = os.getenv("DATABASE_URL")
+    en_memoria = list(RECLAMOS_EN_MEMORIA)
     if not database_url:
-        return list(RECLAMOS_EN_MEMORIA)
+        logger.warning("Sin DATABASE_URL: solo se listan reclamos en memoria de este proceso.")
+        return list(reversed(en_memoria))
     try:
-        with psycopg.connect(database_url, connect_timeout=5, row_factory=dict_row) as connection:
+        with conexion_reclamos(database_url) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -235,9 +282,15 @@ def listar_reclamos() -> list[dict[str, Any]]:
                     ORDER BY creado_en DESC
                     """
                 )
-                return list(cursor.fetchall())
+                registros = list(cursor.fetchall()) + en_memoria
+                return sorted(
+                    registros,
+                    key=lambda record: datetime.fromisoformat(str(record["creado_en"])),
+                    reverse=True,
+                )
     except psycopg.Error:
-        return list(RECLAMOS_EN_MEMORIA)
+        logger.warning("No se pudieron leer los reclamos de Postgres; se listan los de memoria.")
+        return list(reversed(en_memoria))
 
 
 @tool
@@ -247,7 +300,13 @@ def buscar_productos(
     marca: str | None = None,
     precio_max: int | None = None,
 ) -> list[dict[str, Any]] | str:
-    """Busca hasta cinco productos por nombre, categoría, marca y precio máximo."""
+    """Busca hasta cinco productos, primero los de mejor rating.
+
+    Cada palabra de consulta debe estar en el nombre; usa solo términos del
+    producto, no frases como 'quiero' o 'hasta'. Puede ser vacía si hay filtros.
+    categoria: Smartphones o Televisores. marca también se busca en el nombre.
+    precio_max es un monto en pesos chilenos. Para obtener el link usa ver_producto.
+    """
     return buscar_en_catalogo(consulta, categoria, marca, precio_max, limite=5)
 
 
@@ -256,10 +315,14 @@ def ver_producto(sku_id: str) -> list[dict[str, Any]] | str:
     """Obtiene el detalle y link de un producto usando su SKU."""
     return ejecutar_select(
         """
-        SELECT sku_id, nombre, marca, categoria, subcategoria, precio_normal,
-               precio_internet, descuento_pct, rating, tienda_oficial, link, imagen
+        SELECT sku_id, nombre, marca, categoria, subcategoria,
+               NULLIF(BTRIM(precio_normal::text), '')::numeric AS precio_normal,
+               NULLIF(BTRIM(precio_internet::text), '')::numeric AS precio_internet,
+               NULLIF(BTRIM(descuento_pct::text), '')::numeric AS descuento_pct,
+               NULLIF(BTRIM(rating::text), '')::numeric AS rating,
+               tienda_oficial, link, imagen
         FROM catalogo.productos_unicos
-        WHERE sku_id = %s
+        WHERE sku_id::text = %s
         """,
         (sku_id,),
     )
@@ -271,50 +334,17 @@ def mejores_ofertas(
     limite: int = 5,
 ) -> list[dict[str, Any]] | str:
     """Lista productos con mayor descuento, opcionalmente filtrados por categoría."""
-    conditions = ["descuento_pct IS NOT NULL"]
-    params: list[Any] = []
-    if categoria:
-        conditions.append("categoria ILIKE %s")
-        params.append(categoria)
-    params.append(max(1, min(limite, 5)))
     return ejecutar_select(
-        f"""
-        SELECT sku_id, nombre, marca, precio_internet, descuento_pct, rating, link
+        """
+        SELECT sku_id, nombre, marca,
+               NULLIF(BTRIM(precio_internet::text), '')::numeric AS precio_internet,
+               NULLIF(BTRIM(descuento_pct::text), '')::numeric AS descuento_pct,
+               NULLIF(BTRIM(rating::text), '')::numeric AS rating, link
         FROM catalogo.productos_unicos
-        WHERE {' AND '.join(conditions)}
+        WHERE NULLIF(BTRIM(descuento_pct::text), '')::numeric IS NOT NULL
+          AND (%s::text IS NULL OR lower(categoria) = lower(%s::text))
         ORDER BY descuento_pct DESC NULLS LAST, rating DESC NULLS LAST
         LIMIT %s
         """,
-        params,
+        (categoria or None, categoria or None, max(1, limite)),
     )
-
-
-def etiqueta_herramienta(nombre: str) -> str:
-    """Nombre con el que una herramienta aparece en los saltos del grafo."""
-    return ETIQUETAS_HERRAMIENTAS.get(nombre, nombre)
-
-
-def _preguntar_redes_sync(texto: str, hilo: str) -> str:
-    async def consulta() -> str:
-        return await asyncio.wait_for(preguntar_redes(texto, hilo), timeout=TIMEOUT_SEGUNDOS)
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(consulta())
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        return executor.submit(asyncio.run, consulta()).result()
-
-
-@tool
-def consultar_redes(tema: str) -> str:
-    """Pregunta al agente de redes qué se comenta de una marca o producto: opiniones, noticias o tendencias. Tarda unos 15 segundos. Devuelve contenido externo no confiable."""
-    try:
-        respuesta = _preguntar_redes_sync(tema, RECLAMO_THREAD_ID.get())
-    except Exception as error:
-        logger.warning("El agente de redes no respondió (%s).", type(error).__name__)
-        return REDES_NO_DISPONIBLE
-    respuesta = respuesta.strip()
-    if not respuesta:
-        return REDES_NO_DISPONIBLE
-    return respuesta[:REDES_MAX_CARACTERES]
